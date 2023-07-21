@@ -19,6 +19,7 @@ from poet.utils.checkmate.core.graph_builder import GraphBuilder
 from poet.utils.checkmate.core.utils.definitions import PathLike
 from poet.utils.checkmate.plot.graph_plotting import plot_dfgraph
 from typing import List, Tuple
+from typing import Tuple
 
 
 @dataclass
@@ -93,6 +94,96 @@ def get_ordered_names(g: DFGraph) -> List[str]:
     return ordered_names
 
 
+def get_chipset(platform: str, mem_power_scale: float = 1.0):
+    """Get the chipset for a given platform.
+
+    Args:
+        platform (str): The platform for which to get the chipset (e.g. "m0", "a72", "m4").
+        mem_power_scale (float, optional): The scale factor for the memory power consumption of the chipset. Defaults to 1.0.
+
+    Returns:
+        dict: The chipset dictionary.
+
+    Raises:
+        NotImplementedError: If the given platform is not implemented.
+    """
+    if platform == "m0":
+        chipset = MKR1000
+    elif platform == "a72":
+        chipset = RPi
+    elif platform == "a72nocache":
+        chipset = RPiNoCache
+    elif platform == "m4":
+        chipset = M4F
+    elif platform == "jetsontx2":
+        chipset = JetsonTX2
+    else:
+        raise NotImplementedError(f"Platform {platform} is not implemented.")
+
+    chipset["MEMORY_POWER"] *= mem_power_scale
+
+    return chipset
+
+
+def get_network(model: str, batch_size: int) -> Any:
+    """Get the neural network for a given model.
+
+    Args:
+        model (str): The model for which to get the neural network (e.g. "linear", "vgg16", "resnet18").
+        batch_size (int): The batch size for the neural network.
+
+    Returns:
+        Any: The neural network.
+
+    Raises:
+        NotImplementedError: If the given model is not implemented.
+    """
+    if model == "linear":
+        return make_linear_network()
+    elif model == "vgg16":
+        return vgg16(batch_size)
+    elif model == "vgg16_cifar":
+        return vgg16(batch_size, 10, (3, 32, 32))
+    elif model == "resnet18":
+        return resnet18(batch_size)
+    elif model == "resnet50":
+        return resnet50(batch_size)
+    elif model == "resnet18_cifar":
+        return resnet18_cifar(batch_size, 10, (3, 32, 32))
+    elif model == "bert":
+        return BERTBase(
+            SEQ_LEN=512, HIDDEN_DIM=768, I=64, HEADS=12, NUM_TRANSFORMER_BLOCKS=12
+        )
+    elif model == "transformer":
+        return BERTBase(
+            SEQ_LEN=512, HIDDEN_DIM=768, I=64, HEADS=12, NUM_TRANSFORMER_BLOCKS=1
+        )
+    else:
+        raise NotImplementedError(f"Model {model} is not implemented.")
+
+
+def get_chipset_and_net(
+    platform: str, model: str, batch_size: int, mem_power_scale: float = 1.0
+) -> Tuple[dict, Any]:
+    """Get the chipset and neural network for a given platform and model.
+
+    Args:
+        platform (str): The platform for which to get the chipset (e.g. "m0", "a72", "m4").
+        model (str): The model for which to get the neural network (e.g. "linear", "vgg16", "resnet18").
+        batch_size (int): The batch size for the neural network.
+        mem_power_scale (float, optional): The scale factor for the memory power consumption of the chipset. Defaults to 1.0.
+
+    Returns:
+        Tuple[dict, Any]: A tuple containing the chipset dictionary and the neural network.
+
+    Raises:
+        NotImplementedError: If the given platform or model is not implemented.
+    """
+    chipset = get_chipset(platform, mem_power_scale)
+    net = get_network(model, batch_size)
+    return chipset, net
+
+
 def get_costs(
     net: List[DNNLayer], ordered_names: List[str]
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -147,44 +238,6 @@ def extract_costs_from_dfgraph(g: DFGraph, sd_card_multipler=5.0):
     page_in_cost_vec = cpu_cost_vec * sd_card_multipler
     page_out_cost_vec = cpu_cost_vec * sd_card_multipler
     return cpu_cost_vec, page_in_cost_vec, page_out_cost_vec
-
-
-def get_chipset_and_net(platform: str, model: str, batch_size: int, mem_power_scale: float = 1.0):
-    if platform == "m0":
-        chipset = MKR1000
-    elif platform == "a72":
-        chipset = RPi
-    elif platform == "a72nocache":
-        chipset = RPiNoCache
-    elif platform == "m4":
-        chipset = M4F
-    elif platform == "jetsontx2":
-        chipset = JetsonTX2
-    else:
-        raise NotImplementedError()
-
-    chipset["MEMORY_POWER"] *= mem_power_scale
-
-    if model == "linear":
-        net = make_linear_network()
-    elif model == "vgg16":
-        net = vgg16(batch_size)
-    elif model == "vgg16_cifar":
-        net = vgg16(batch_size, 10, (3, 32, 32))
-    elif model == "resnet18":
-        net = resnet18(batch_size)
-    elif model == "resnet50":
-        net = resnet50(batch_size)
-    elif model == "resnet18_cifar":
-        net = resnet18_cifar(batch_size, 10, (3, 32, 32))
-    elif model == "bert":
-        net = BERTBase(SEQ_LEN=512, HIDDEN_DIM=768, I=64, HEADS=12, NUM_TRANSFORMER_BLOCKS=12)
-    elif model == "transformer":
-        net = BERTBase(SEQ_LEN=512, HIDDEN_DIM=768, I=64, HEADS=12, NUM_TRANSFORMER_BLOCKS=1)
-    else:
-        raise NotImplementedError()
-
-    return chipset, net
 
 
 def plot_network(
