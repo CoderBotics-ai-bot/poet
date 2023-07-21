@@ -18,6 +18,7 @@ from poet.utils.checkmate.core.dfgraph import DFGraph
 from poet.utils.checkmate.core.graph_builder import GraphBuilder
 from poet.utils.checkmate.core.utils.definitions import PathLike
 from poet.utils.checkmate.plot.graph_plotting import plot_dfgraph
+from typing import List, Tuple
 
 
 @dataclass
@@ -43,7 +44,16 @@ def save_network_repr(net: List[DNNLayer], readable_path: PathLike = None, pickl
             pickle.dump(net, f)
 
 
-def make_dfgraph_costs(net, device):
+def create_graph(net: List[DNNLayer], device: str) -> DFGraph:
+    """Create a DFGraph object representing the power costs of each layer in the DNN network.
+
+    Args:
+        net (List[DNNLayer]): A list of DNNLayer objects representing the layers of the DNN network.
+        device (str): The device on which the power costs are computed.
+
+    Returns:
+        DFGraph: A DFGraph object representing the power costs of each layer in the DNN network.
+    """
     power_specs = get_net_costs(net, device)
     per_layer_specs = pd.DataFrame(power_specs).to_dict(orient="records")
 
@@ -52,22 +62,82 @@ def make_dfgraph_costs(net, device):
     for idx, (layer, specs) in enumerate(zip(net, per_layer_specs)):
         layer_name = "layer{}_{}".format(idx, layer.__class__.__name__)
         layer_names[layer] = layer_name
-        gb.add_node(layer_name, cpu_cost=specs["runtime_ms"], ram_cost=specs["memory_bytes"], backward=isinstance(layer, GradientLayer))
+        gb.add_node(
+            name=layer_name,
+            cpu_cost=specs["runtime_ms"],
+            ram_cost=specs["memory_bytes"],
+            backward=isinstance(layer, GradientLayer),
+        )
         gb.set_parameter_cost(gb.parameter_cost + specs["param_memory_bytes"])
         page_in_cost_dict[layer_name] = specs["pagein_cost_joules"]
         page_out_cost_dict[layer_name] = specs["pageout_cost_joules"]
         power_cost_dict[layer_name] = specs["compute_cost_joules"]
         for dep in layer.depends_on:
             gb.add_deps(layer_name, layer_names[dep])
-    g = gb.make_graph()
 
+    return gb.make_graph()
+
+
+def get_ordered_names(g: DFGraph) -> List[str]:
+    """Get the ordered names of the nodes in the DFGraph.
+
+    Args:
+        g (DFGraph): The DFGraph object.
+
+    Returns:
+        List[str]: A list of the ordered names of the nodes in the DFGraph.
+    """
     ordered_names = [(topo_idx, name) for topo_idx, name in g.node_names.items()]
     ordered_names.sort(key=lambda x: x[0])
     ordered_names = [x for _, x in ordered_names]
+    return ordered_names
 
-    compute_costs = np.asarray([power_cost_dict[name] for name in ordered_names]).reshape((-1, 1))
-    page_in_costs = np.asarray([page_in_cost_dict[name] for name in ordered_names]).reshape((-1, 1))
-    page_out_costs = np.asarray([page_out_cost_dict[name] for name in ordered_names]).reshape((-1, 1))
+
+def get_costs(
+    net: List[DNNLayer], ordered_names: List[str]
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Get the compute costs, page-in costs, and page-out costs for each layer in the network.
+
+    Args:
+        net (List[DNNLayer]): A list of DNNLayer objects representing the layers of the DNN network.
+        ordered_names (List[str]): A list of ordered names of the nodes in the DFGraph.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing the compute costs, page-in costs,
+        and page-out costs for each layer in the network.
+    """
+    power_specs = get_net_costs(net, device)
+    per_layer_specs = pd.DataFrame(power_specs).to_dict(orient="records")
+
+    compute_costs = np.asarray(
+        [per_layer_specs[name]["compute_cost_joules"] for name in ordered_names]
+    ).reshape((-1, 1))
+    page_in_costs = np.asarray(
+        [per_layer_specs[name]["pagein_cost_joules"] for name in ordered_names]
+    ).reshape((-1, 1))
+    page_out_costs = np.asarray(
+        [per_layer_specs[name]["pageout_cost_joules"] for name in ordered_names]
+    ).reshape((-1, 1))
+
+    return compute_costs, page_in_costs, page_out_costs
+
+
+def make_dfgraph_costs(
+    net: List[DNNLayer], device: str
+) -> Tuple[DFGraph, np.ndarray, np.ndarray, np.ndarray]:
+    """Create a DFGraph object representing the power costs of each layer in the DNN network.
+
+    Args:
+        net (List[DNNLayer]): A list of DNNLayer objects representing the layers of the DNN network.
+        device (str): The device on which the power costs are computed.
+
+    Returns:
+        Tuple[DFGraph, np.ndarray, np.ndarray, np.ndarray]: A tuple containing the DFGraph object, the compute costs,
+        page-in costs, and page-out costs for each layer in the network.
+    """
+    g = create_graph(net, device)
+    ordered_names = get_ordered_names(g)
+    compute_costs, page_in_costs, page_out_costs = get_costs(net, ordered_names)
     return g, compute_costs, page_in_costs, page_out_costs
 
 
