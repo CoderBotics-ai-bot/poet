@@ -18,6 +18,9 @@ from poet.utils.checkmate.core.dfgraph import DFGraph
 from poet.utils.checkmate.core.graph_builder import GraphBuilder
 from poet.utils.checkmate.core.utils.definitions import PathLike
 from poet.utils.checkmate.plot.graph_plotting import plot_dfgraph
+from typing import List, Tuple
+import warnings
+from typing import Tuple
 
 
 @dataclass
@@ -43,31 +46,77 @@ def save_network_repr(net: List[DNNLayer], readable_path: PathLike = None, pickl
             pickle.dump(net, f)
 
 
-def make_dfgraph_costs(net, device):
-    power_specs = get_net_costs(net, device)
-    per_layer_specs = pd.DataFrame(power_specs).to_dict(orient="records")
 
-    layer_names, power_cost_dict, page_in_cost_dict, page_out_cost_dict = {}, {}, {}, {}
+def make_dfgraph_costs(
+    net: List[DNNLayer], device: str
+) -> Tuple[DFGraph, np.ndarray, np.ndarray, np.ndarray]:
+    """Computes the power costs for each layer in a given network using the specified device.
+
+    Args:
+        net (List[DNNLayer]): The DNN layer network.
+        device (str): The device on which the power costs will be computed.
+
+    Returns:
+        Tuple[DFGraph, np.ndarray, np.ndarray, np.ndarray]: A tuple containing the following:
+            - DFGraph: The computational graph representing the network.
+            - np.ndarray: The compute costs for each layer.
+            - np.ndarray: The page in costs for each layer.
+            - np.ndarray: The page out costs for each layer.
+    """
+
+    # Helper function to get layer name
+    def get_layer_name(layer, idx):
+        return f"layer{idx}_{layer.__class__.__name__}"
+
+    # Create graph builder and initialize dicts
     gb = GraphBuilder()
-    for idx, (layer, specs) in enumerate(zip(net, per_layer_specs)):
-        layer_name = "layer{}_{}".format(idx, layer.__class__.__name__)
+    compute_costs, page_in_costs, page_out_costs = [], [], []
+    layer_names = {}
+
+    # Iterate over network layers and compute power costs
+    for idx, layer in enumerate(net):
+        layer_name = get_layer_name(layer, idx)
+        (
+            runtime_ms,
+            memory_bytes,
+            param_memory_bytes,
+            pagein_cost_joules,
+            pageout_cost_joules,
+            compute_cost_joules,
+        ) = get_net_costs([layer], device)[0]
+
+        # Add node to graph builder
+        gb.add_node(
+            layer_name,
+            cpu_cost=runtime_ms,
+            ram_cost=memory_bytes,
+            backward=isinstance(layer, GradientLayer),
+        )
+        gb.set_parameter_cost(gb.parameter_cost + param_memory_bytes)
+
+        # Update dictionaries
         layer_names[layer] = layer_name
-        gb.add_node(layer_name, cpu_cost=specs["runtime_ms"], ram_cost=specs["memory_bytes"], backward=isinstance(layer, GradientLayer))
-        gb.set_parameter_cost(gb.parameter_cost + specs["param_memory_bytes"])
-        page_in_cost_dict[layer_name] = specs["pagein_cost_joules"]
-        page_out_cost_dict[layer_name] = specs["pageout_cost_joules"]
-        power_cost_dict[layer_name] = specs["compute_cost_joules"]
+        compute_costs.append(compute_cost_joules)
+        page_in_costs.append(pagein_cost_joules)
+        page_out_costs.append(pageout_cost_joules)
+
+        # Add dependencies to graph builder
         for dep in layer.depends_on:
             gb.add_deps(layer_name, layer_names[dep])
+
+    # Make graph from the graph builder
     g = gb.make_graph()
 
+    # Get ordered names
     ordered_names = [(topo_idx, name) for topo_idx, name in g.node_names.items()]
     ordered_names.sort(key=lambda x: x[0])
     ordered_names = [x for _, x in ordered_names]
 
-    compute_costs = np.asarray([power_cost_dict[name] for name in ordered_names]).reshape((-1, 1))
-    page_in_costs = np.asarray([page_in_cost_dict[name] for name in ordered_names]).reshape((-1, 1))
-    page_out_costs = np.asarray([page_out_cost_dict[name] for name in ordered_names]).reshape((-1, 1))
+    # Convert lists to numpy arrays
+    compute_costs = np.asarray(compute_costs).reshape((-1, 1))
+    page_in_costs = np.asarray(page_in_costs).reshape((-1, 1))
+    page_out_costs = np.asarray(page_out_costs).reshape((-1, 1))
+
     return g, compute_costs, page_in_costs, page_out_costs
 
 
@@ -79,42 +128,97 @@ def extract_costs_from_dfgraph(g: DFGraph, sd_card_multipler=5.0):
     return cpu_cost_vec, page_in_cost_vec, page_out_cost_vec
 
 
-def get_chipset_and_net(platform: str, model: str, batch_size: int, mem_power_scale: float = 1.0):
-    if platform == "m0":
-        chipset = MKR1000
-    elif platform == "a72":
-        chipset = RPi
-    elif platform == "a72nocache":
-        chipset = RPiNoCache
-    elif platform == "m4":
-        chipset = M4F
-    elif platform == "jetsontx2":
-        chipset = JetsonTX2
-    else:
-        raise NotImplementedError()
 
+def get_chipset(platform: str) -> dict:
+    """
+    Returns the chipset for the given platform.
+
+    Args:
+        platform (str): The platform name. Supported platforms are: "m0", "a72", "a72nocache", "m4", "jetsontx2".
+
+    Returns:
+        dict: The chipset dictionary.
+
+    Raises:
+        NotImplementedError: If the platform is not supported.
+    """
+    platforms = {
+        "m0": MKR1000,
+        "a72": RPi,
+        "a72nocache": RPiNoCache,
+        "m4": M4F,
+        "jetsontx2": JetsonTX2,
+    }
+
+    chipset = platforms.get(platform)
+    if chipset is None:
+        raise NotImplementedError("Unsupported platform: {}".format(platform))
+
+    return chipset
+
+
+def get_network(
+    model: str, batch_size: int, type: Tuple[int, int, int] = (3, 32, 32)
+) -> object:
+    """
+    Returns the network object for the given model.
+
+    Args:
+        model (str): The model name. Supported models are: "linear", "vgg16", "vgg16_cifar", "resnet18", "resnet50", "resnet18_cifar", "bert", "transformer".
+        batch_size (int): The batch size.
+        type (Tuple[int, int, int], optional): The input tensor shape. Defaults to (3, 32, 32).
+
+    Returns:
+        object: The network object.
+
+    Raises:
+        NotImplementedError: If the model is not supported.
+    """
+    models = {
+        "linear": make_linear_network,
+        "vgg16": lambda: vgg16(batch_size),
+        "vgg16_cifar": lambda: vgg16(batch_size, 10, type),
+        "resnet18": lambda: resnet18(batch_size),
+        "resnet50": lambda: resnet50(batch_size),
+        "resnet18_cifar": lambda: resnet18_cifar(batch_size, 10, type),
+        "bert": lambda: BERTBase(
+            SEQ_LEN=512, HIDDEN_DIM=768, I=64, HEADS=12, NUM_TRANSFORMER_BLOCKS=12
+        ),
+        "transformer": lambda: BERTBase(
+            SEQ_LEN=512, HIDDEN_DIM=768, I=64, HEADS=12, NUM_TRANSFORMER_BLOCKS=1
+        ),
+    }
+
+    network = models.get(model)
+    if network is None:
+        raise NotImplementedError("Unsupported model: {}".format(model))
+
+    return network()
+
+
+def get_chipset_and_net(
+    platform: str, model: str, batch_size: int, mem_power_scale: float = 1.0
+) -> Tuple[dict, object]:
+    """
+    Returns the chipset and network for the given platform and model.
+
+    Args:
+        platform (str): The platform name. Supported platforms are: "m0", "a72", "a72nocache", "m4", "jetsontx2".
+        model (str): The model name. Supported models are: "linear", "vgg16", "vgg16_cifar", "resnet18", "resnet50", "resnet18_cifar", "bert", "transformer".
+        batch_size (int): The batch size.
+        mem_power_scale (float, optional): The memory power scale. Defaults to 1.0.
+
+    Returns:
+        Tuple[dict, object]: A tuple containing the chipset dictionary and the network object.
+
+    Raises:
+        NotImplementedError: If the platform or model is not supported.
+    """
+    chipset = get_chipset(platform)
     chipset["MEMORY_POWER"] *= mem_power_scale
 
-    if model == "linear":
-        net = make_linear_network()
-    elif model == "vgg16":
-        net = vgg16(batch_size)
-    elif model == "vgg16_cifar":
-        net = vgg16(batch_size, 10, (3, 32, 32))
-    elif model == "resnet18":
-        net = resnet18(batch_size)
-    elif model == "resnet50":
-        net = resnet50(batch_size)
-    elif model == "resnet18_cifar":
-        net = resnet18_cifar(batch_size, 10, (3, 32, 32))
-    elif model == "bert":
-        net = BERTBase(SEQ_LEN=512, HIDDEN_DIM=768, I=64, HEADS=12, NUM_TRANSFORMER_BLOCKS=12)
-    elif model == "transformer":
-        net = BERTBase(SEQ_LEN=512, HIDDEN_DIM=768, I=64, HEADS=12, NUM_TRANSFORMER_BLOCKS=1)
-    else:
-        raise NotImplementedError()
-
-    return chipset, net
+    network = get_network(model, batch_size)
+    return chipset, network
 
 
 def plot_network(
