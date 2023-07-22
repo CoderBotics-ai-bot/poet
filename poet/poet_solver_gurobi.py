@@ -10,71 +10,16 @@ from poet.poet_solver import POETSolution
 from poet.utils.checkmate.core.dfgraph import DFGraph
 from poet.utils.checkmate.core.utils.definitions import PathLike
 from poet.utils.checkmate.core.utils.timer import Timer
+from gurobipy import GRB, Model
+
+# noinspection PyPackageRequirements
+
+# POET ILP defined using Gurobi
 
 # noinspection PyPackageRequirements
 
 # POET ILP defined using Gurobi
 class POETSolverGurobi:
-    def __init__(
-        self,
-        g: DFGraph,
-        # cost weighting
-        cpu_power_cost_vec_joule: np.ndarray,
-        pagein_power_cost_vec_joule: np.ndarray,
-        pageout_power_cost_vec_joule: np.ndarray,
-        # constraints
-        ram_budget_bytes: Optional[float] = None,
-        runtime_budget_ms: Optional[float] = None,
-        paging=True,
-        remat=True,
-        # solver options
-        time_limit_s: float = 1e100,
-        solve_threads: int = None,
-    ):
-        self.g = g
-        self.T = self.g.size
-        self.runtime_budget_ms = runtime_budget_ms
-        self.ram_budget_bytes = ram_budget_bytes
-        self.remat = remat
-        self.paging = paging
-        assert cpu_power_cost_vec_joule.shape == (self.T, 1)
-        assert pagein_power_cost_vec_joule.shape == (self.T, 1)
-        assert pageout_power_cost_vec_joule.shape == (self.T, 1)
-
-        self.timer = Timer
-
-        self.m = Model(self.model_name)
-        self.m.Params.TimeLimit = time_limit_s
-        if solve_threads:
-            self.m.Params.Threads = solve_threads
-
-        grb_ram_ub = ram_budget_bytes if ram_budget_bytes is not None else GRB.INFINITY
-
-        self.R = self.m.addVars(self.T, self.T, name="R", vtype=GRB.BINARY)
-        self.SRam = self.m.addVars(self.T, self.T, name="SRam", vtype=GRB.BINARY)
-        self.SSd = self.m.addVars(self.T, self.T, name="SSd", vtype=GRB.BINARY)
-        self.MIn = self.m.addVars(self.T, self.T, name="MIn", vtype=GRB.BINARY)
-        self.MOut = self.m.addVars(self.T, self.T, name="MOut", vtype=GRB.BINARY)
-        self.U = self.m.addVars(self.T, self.T, name="U", vtype=GRB.CONTINUOUS, lb=0, ub=grb_ram_ub)
-        self.Free_E = self.m.addVars(self.T, len(self.g.edge_list), name="Free_E", vtype=GRB.BINARY)
-
-        self._create_objective(
-            cpu_power_cost_vec_joule,
-            pagein_power_cost_vec_joule,
-            pageout_power_cost_vec_joule,
-        )
-        self._initialize_variables()
-        self._create_correctness_constraints()
-        if ram_budget_bytes is not None:
-            ram_vec_bytes = [self.g.cost_ram[i] for i in range(self.T)]
-            self._create_ram_memory_constraints(ram_vec_bytes)
-        if runtime_budget_ms is not None:
-            runtime_vec_ms = [self.g.cost_cpu[i] for i in range(self.T)]
-            self._create_runtime_constraints(runtime_vec_ms, runtime_budget_ms)
-        if not self.paging:
-            self._disable_paging()
-        if not self.remat:
-            self._disable_remat()
 
     def _create_objective(self, cpu_cost, pagein_cost, pageout_cost):
         total_cpu_power = quicksum(self.R[t, i] * cpu_cost[i] for t in range(self.T) for i in range(self.T))
@@ -246,3 +191,70 @@ class POETSolverGurobi:
             feasible=is_feasible,
             solve_time_s=solve_time,
         )
+
+    def __init__(
+        self,
+        g: DFGraph,
+        cpu_power_cost_vec_joule: np.ndarray,
+        pagein_power_cost_vec_joule: np.ndarray,
+        pageout_power_cost_vec_joule: np.ndarray,
+        ram_budget_bytes: Optional[float] = None,
+        runtime_budget_ms: Optional[float] = None,
+        paging: bool = True,
+        remat: bool = True,
+        time_limit_s: float = 1e100,
+        solve_threads: int = None,
+    ) -> None:
+        """Initialize the POETSolverGurobi class.
+
+        Args:
+            g (DFGraph): The dataflow graph to be solved.
+            cpu_power_cost_vec_joule (np.ndarray): The cost of CPU power consumption in Joules.
+            pagein_power_cost_vec_joule (np.ndarray): The cost of page-in power consumption in Joules.
+            pageout_power_cost_vec_joule (np.ndarray): The cost of page-out power consumption in Joules.
+            ram_budget_bytes (float, optional): The RAM budget in bytes. Defaults to None.
+            runtime_budget_ms (float, optional): The runtime budget in milliseconds. Defaults to None.
+            paging (bool, optional): Indicates if paging is allowed. Defaults to True.
+            remat (bool, optional): Indicates if rematerialization is allowed. Defaults to True.
+            time_limit_s (float, optional): The time limit for the solver in seconds. Defaults to 1e100.
+            solve_threads (int, optional): The number of solve threads to use. Defaults to None.
+        """
+        self.g = g
+        self.T = self.g.size
+        self.timer = Timer
+        self.ram_budget_bytes = ram_budget_bytes
+        self.runtime_budget_ms = runtime_budget_ms
+        self.remat = remat
+        self.paging = paging
+        assert cpu_power_cost_vec_joule.shape == (self.T, 1)
+        assert pagein_power_cost_vec_joule.shape == (self.T, 1)
+        assert pageout_power_cost_vec_joule.shape == (self.T, 1)
+
+        self.m = Model(self.model_name)
+        self.m.Params.TimeLimit = time_limit_s
+        if solve_threads:
+            self.m.Params.Threads = solve_threads
+
+        grb_ram_ub = ram_budget_bytes if ram_budget_bytes is not None else GRB.INFINITY
+
+        self._initialize_variables(grb_ram_ub)
+        self._create_objective(
+            cpu_power_cost_vec_joule,
+            pagein_power_cost_vec_joule,
+            pageout_power_cost_vec_joule,
+        )
+        self._create_correctness_constraints()
+        self._create_optional_constraints()
+
+    def _create_optional_constraints(self) -> None:
+        """Create optional constraints based on configuration."""
+        if self.ram_budget_bytes is not None:
+            ram_vec_bytes = [self.g.cost_ram[i] for i in range(self.T)]
+            self._create_ram_memory_constraints(ram_vec_bytes)
+        if self.runtime_budget_ms is not None:
+            runtime_vec_ms = [self.g.cost_cpu[i] for i in range(self.T)]
+            self._create_runtime_constraints(runtime_vec_ms, self.runtime_budget_ms)
+        if not self.paging:
+            self._disable_paging()
+        if not self.remat:
+            self._disable_remat()
