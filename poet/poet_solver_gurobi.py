@@ -19,13 +19,15 @@ from gurobipy import GRB, Model
 # noinspection PyPackageRequirements
 
 # POET ILP defined using Gurobi
-class POETSolverGurobi:
 
-    def _create_objective(self, cpu_cost, pagein_cost, pageout_cost):
-        total_cpu_power = quicksum(self.R[t, i] * cpu_cost[i] for t in range(self.T) for i in range(self.T))
-        total_pagein_power = quicksum(self.MIn[t, i] * pagein_cost[i] for t in range(self.T) for i in range(self.T))
-        total_pageout_power = quicksum(self.MOut[t, i] * pageout_cost[i] for t in range(self.T) for i in range(self.T))
-        self.m.setObjective(total_cpu_power + total_pagein_power + total_pageout_power, GRB.MINIMIZE)
+# noinspection PyPackageRequirements
+
+# POET ILP defined using Gurobi
+
+# noinspection PyPackageRequirements
+
+# POET ILP defined using Gurobi
+class POETSolverGurobi:
 
     def _initialize_variables(self):
         self.m.addLConstr(
@@ -258,3 +260,43 @@ class POETSolverGurobi:
             self._disable_paging()
         if not self.remat:
             self._disable_remat()
+
+
+    def _create_objective(
+        self, cpu_cost: List[float], pagein_cost: List[float], pageout_cost: List[float]
+    ) -> None:
+        """
+        Create the objective function for the Gurobi model.
+
+        Args:
+            cpu_cost (List[float]): The CPU cost for each time step.
+            pagein_cost (List[float]): The page-in cost for each time step.
+            pageout_cost (List[float]): The page-out cost for each time step.
+        """
+
+        def get_total_power(
+            decision_vars: Dict[Tuple[int, int], Var], cost_list: List[float]
+        ) -> float:
+            """
+            Calculate the total power cost using the decision variables and the cost list.
+
+            Args:
+                decision_vars (Dict[Tuple[int, int], Var]): The decision variables.
+                cost_list (List[float]): The cost list for each time step.
+
+            Returns:
+                float: The total power cost.
+            """
+            return quicksum(
+                decision_vars[t, i] * cost_list[i]
+                for t in range(self.T)
+                for i in range(self.T)
+            )
+
+        total_cpu_power = get_total_power(self.R, cpu_cost)
+        total_pagein_power = get_total_power(self.MIn, pagein_cost)
+        total_pageout_power = get_total_power(self.MOut, pageout_cost)
+
+        self.m.setObjective(
+            total_cpu_power + total_pagein_power + total_pageout_power, GRB.MINIMIZE
+        )
