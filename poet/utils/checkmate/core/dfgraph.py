@@ -5,33 +5,13 @@ from typing import Iterable, Dict, List, Set
 from toposort import toposort
 from poet.utils.checkmate.core.utils.definitions import Vertex, EdgeList, AdjList
 from poet.utils.checkmate.core.utils.graph import edge_to_adj_list, adj_to_edge_list, gcd, connected_components
+from poet.utils.checkmate.core.utils.definitions import Vertex, AdjList
+from poet.utils.checkmate.core.utils.graph import edge_to_adj_list, adj_to_edge_list
+
+
 
 
 class DFGraph:
-    def __init__(
-        self,
-        args: AdjList,
-        v: Iterable[Vertex],
-        backward_nodes: Iterable[Vertex] = None,
-        cost_cpu: Dict[Vertex, int] = None,
-        cost_ram: Dict[Vertex, int] = None,
-        node_names: Dict[Vertex, str] = None,
-        cost_ram_parameters: int = 0,
-    ):
-        """
-        Graph defines the forward and backward graph for a neural network
-        :param args (Dict[int, List[int]]): Dependency listing, where arguments ordered
-        :param v: List of nodes in the graph
-        :param cost_cpu: Dictionary mapping nodes to respective integral runtime costs (for forward/backward operators)
-        :param cost_ram: Dictionary mapping nodes to respective integral memory costs (for forward/backward operators)
-        """
-        self.v = list(sorted(v))
-        self.backward_nodes = set(backward_nodes) if backward_nodes else set()
-        self.args = defaultdict(list, args)
-        self.node_names = node_names if node_names is not None else {}
-        self.cost_cpu = cost_cpu if cost_cpu else {v: 1 for v in set(self.v)}
-        self.cost_ram = cost_ram if cost_ram else {v: 1 for v in set(self.v)}
-        self.cost_ram_parameters = cost_ram_parameters
 
     @property
     @lru_cache(maxsize=1)
@@ -161,3 +141,35 @@ class DFGraph:
         """compute minimum memory needed for any single node (ie inputs and outputs)"""
         vfwd = [v for v in self.v if v not in self.backward_nodes]
         return max([sum([self.cost_ram[u] for u in self.predecessors(v)]) + self.cost_ram[v] for v in vfwd])
+
+    def __init__(
+        self,
+        args: AdjList,
+        v: Iterable[Vertex],
+        backward_nodes: Iterable[Vertex] = None,
+        cost_cpu: Dict[Vertex, int] = None,
+        cost_ram: Dict[Vertex, int] = None,
+        node_names: Dict[Vertex, str] = None,
+        cost_ram_parameters: int = 0,
+    ):
+        """
+        Initializes a DFGraph object.
+
+        Parameters:
+        - args (AdjList): Dependency listing, where arguments are ordered.
+        - v (Iterable[Vertex]): List of nodes in the graph.
+        - backward_nodes (Iterable[Vertex], optional): List of backward nodes in the graph. Default is None.
+        - cost_cpu (Dict[Vertex, int], optional): Dictionary mapping nodes to respective integral runtime costs
+          (for forward/backward operators). Default is None.
+        - cost_ram (Dict[Vertex, int], optional): Dictionary mapping nodes to respective integral memory costs
+          (for forward/backward operators). Default is None.
+        - node_names (Dict[Vertex, str], optional): Dictionary mapping nodes to respective names. Default is None.
+        - cost_ram_parameters (int, optional): Fixed memory cost for the parameters. Default is 0.
+        """
+        self.v = list(sorted(v))
+        self.backward_nodes = set(backward_nodes) if backward_nodes else set()
+        self.args = defaultdict(list, args)
+        self.node_names = node_names or {}
+        self.cost_cpu = cost_cpu or {v: 1 for v in set(self.v)}
+        self.cost_ram = cost_ram or {v: 1 for v in set(self.v)}
+        self.cost_ram_parameters = cost_ram_parameters
