@@ -10,6 +10,7 @@ from poet.util import get_chipset_and_net, make_dfgraph_costs, plot_dfgraph, pri
 from gurobipy import GRB, GurobiError
 
 
+
 def solve(
     model: Literal[
         "linear",
@@ -26,27 +27,38 @@ def solve(
     runtime_budget: float,
     paging: int = 1,
     remat: int = 1,
-    mem_power_scale=1.0,
-    batch_size=1,
+    mem_power_scale: float = 1.0,
+    batch_size: int = 1,
     solver: Literal["gurobipy", "pulp-gurobi", "pulp-cbc"] = "gurobipy",
     print_power_costs: bool = False,
     print_graph_info: bool = True,
     plot_directory: Optional[str] = None,
     time_limit_s: float = 1e100,
     solve_threads: Optional[int] = None,
-):
-    """Solve a POET LP problem.
-    :param model: The model to solve for.
-    :param platform: The platform to solve for.
-    :param ram_budget: The RAM budget in bytes.
-    :param runtime_budget: The runtime budget in milliseconds.
-    :param paging: Whether to enable paging.
-    :param remat: Whether to enable rematerialization.
-    :param mem_power_scale: A scaling factor for the memory power.
-    :param batch_size: The batch size to use for the model.
-    :param solver: The LP solver to use.
-    :param time_limit_s: The time limit for solving in seconds.
-    :param solve_threads: The number of threads to use for solving.
+) -> POETResult:
+    """Solves a POET LP problem.
+
+    Args:
+        model: The model to solve for.
+        platform: The platform to solve for.
+        ram_budget: The RAM budget in bytes.
+        runtime_budget: The runtime budget in milliseconds.
+        paging: Whether to enable paging.
+        remat: Whether to enable rematerialization.
+        mem_power_scale: A scaling factor for the memory power.
+        batch_size: The batch size to use for the model.
+        solver: The LP solver to use.
+        print_power_costs: Whether to print power costs.
+        print_graph_info: Whether to print graph information.
+        plot_directory: The directory for plotting the dfgraph.
+        time_limit_s: The time limit for solving in seconds.
+        solve_threads: The number of threads to use for solving.
+
+    Returns:
+        The result of the POET optimization.
+
+    Raises:
+        GurobiError: If there is an error with the Gurobi solver.
     """
     chipset, net = get_chipset_and_net(
         platform=platform,
@@ -55,7 +67,7 @@ def solve(
         mem_power_scale=mem_power_scale,
     )
 
-    # build graph
+    # Build graph
     graph_costs = make_dfgraph_costs(net=net, device=chipset)
     (
         g,
@@ -77,7 +89,9 @@ def solve(
     total_ram = sum(g.cost_ram[i] for i in g.vfwd)
 
     if print_graph_info:
-        print(f"Total runtime of graph (forward + backward): {total_runtime:.5f} milliseconds")
+        print(
+            f"Total runtime of graph (forward + backward): {total_runtime:.5f} milliseconds"
+        )
         print(f"Total RAM consumption of forward pass: {total_ram} bytes")
 
     solver_params = dict(
@@ -109,15 +123,9 @@ def solve(
             raise e
 
     if solution is not None and solution.feasible:
-        cpu_cost_vec = np.asarray([g.cost_cpu[i] for i in range(g.size)])[np.newaxis, :].T
-        """
-        Making it compatible with poet.utils.checkmate.core.utils.scheduler.py
-        Gurobi schedule is the optimizer schedule, which may not be accurate.
-        So we generate our own schedule that is tf2 compatible
-        """
-        total_power_cost_page = np.sum(solution.Min @ pagein_power_cost_vec_joule + solution.Mout @ pageout_power_cost_vec_joule)
-        total_power_cost_cpu = np.sum(solution.R @ cpu_power_cost_vec_joule)
-        total_runtime = np.sum(solution.R @ cpu_cost_vec)
+        cpu_cost_vec = np.asarray([g.cost_cpu[i] for i in range(g.size)])[
+            np.newaxis, :
+        ].T
     else:
         total_power_cost_page, total_power_cost_cpu, total_runtime = None, None, None
 
