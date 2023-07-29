@@ -1,0 +1,50 @@
+from poet.utils.checkmate.plot.graph_plotting import *
+import pytest
+import tempfile
+from pathlib import Path
+from graphviz import Digraph
+
+from poet.utils.checkmate.core.dfgraph import DFGraph
+from module import plot_dfgraph
+
+
+@pytest.fixture
+def sample_dfgraph():
+    graph = DFGraph()
+    graph.add_node(0)
+    graph.add_node(1)
+    graph.add_node(2)
+    graph.add_edge(0, 1)
+    graph.add_edge(1, 2)
+    graph.add_edge(0, 2)
+    return graph
+
+
+@pytest.fixture
+def temp_directory():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        yield temp_dir
+
+
+def test_plot_dfgraph(sample_dfgraph, temp_directory):
+    # Test the plot_dfgraph function
+    plot_dfgraph(sample_dfgraph, temp_directory)
+
+    # Check if the file is generated in the temporary directory
+    output_file = Path(temp_directory) / "render_dfgraph.pdf"
+    assert output_file.exists()
+
+    # Check the generated graph using graphviz
+    dot = Digraph()
+    dot.node("0", "")
+    dot.node("1", "")
+    dot.node("2", "")
+    dot.edge("0", "1", label="0")
+    dot.edge("1", "2", label="1")
+    dot.edge("0", "2", label="0")
+
+    expected_graph = dot.source
+    with open(output_file, "r") as f:
+        generated_graph = f.read()
+
+    assert generated_graph == expected_graph
